@@ -1,0 +1,139 @@
+---
+title: "PredictingMood"
+author: "Anna Langener"
+date: "`r Sys.Date()`"
+output:
+  word_document: default
+  html_document: default
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(dplyr)
+library(tidyverse)
+library(rempsyc) # to make apa tables
+library(nlme) # For checking assumptions
+library(flextable) # for tables
+library(ggplot2)
+knitr::opts_chunk$set(dpi=300,fig.width=7)
+
+Affect_Passive <- read.csv("/Users/annalangener/Nextcloud/CombiningMethodsMoodPrediction_Data/DatasetG_lag1.csv")
+Interactions <- read.csv("/Users/annalangener/Nextcloud/CombiningMethodsMoodPrediction_Data/Interactions_ESM.csv")
+Baseline <- read.csv("/Users/annalangener/Nextcloud/Shared/Testing Methods to Capture Social Context/Sample 2/Data/Baseline/Clean_Baseline.csv")
+```
+
+## Participants and Procedure
+```{r}
+IDs_beforeexclusion = c(302,306,307,308,309,313,316,317,320,321,323,324,325,326,329)
+
+Baseline <- Baseline[Baseline$id %in% IDs_beforeexclusion,]
+
+table(Baseline$gender)
+mean(Baseline$age)
+max(Baseline$age)
+min(Baseline$age)
+sd(Baseline$age)
+
+IDs = c(302,307,308,309,313,316,320,323,324,325,326) # after exclusion
+
+Baseline <- Baseline[Baseline$id %in% IDs,]
+
+nrow(Affect_Passive)/3 # Answered ESM beeps (divided by three because we have three levels of aggregation)
+```
+
+## Descriptives
+```{r, echo=FALSE}
+Affect_Passive$Participant <- recode(Affect_Passive$ParticipantNumber,"TSCS2_2JV3YK" = 1,"TSCS2_3HJ9LJ" = 2, "TSCS2_4KUR2Z" = 3,"TSCS2_4NXMUS" = 4, "TSCS2_5MNS2N" = 5,"TSCS2_5W3RE9" = 6,"TSCS2_6B972L" = 7, "TSCS2_6BBRGP" = 8,"TSCS2_7NJKV7" = 9,"TSCS2_857ER8" = 10,"TSCS2_9C99HU" = 11)
+
+Interactions$Participant <- recode(Interactions$ParticipantNumber,"TSCS2_2JV3YK" = 1,"TSCS2_3HJ9LJ" = 2, "TSCS2_4KUR2Z" = 3,"TSCS2_4NXMUS" = 4, "TSCS2_5MNS2N" = 5,"TSCS2_5W3RE9" = 6,"TSCS2_6B972L" = 7, "TSCS2_6BBRGP" = 8,"TSCS2_7NJKV7" = 9,"TSCS2_857ER8" = 10,"TSCS2_9C99HU" = 11)
+
+Int <- Interactions %>% group_by(Participant) %>% summarize("Total Interactions" = n())
+
+Affect_Passive %>% group_by(timescale_beforeESM,Participant) %>% summarize(n())
+Affect_Passive_s <- Affect_Passive[Affect_Passive$timescale_beforeESM == 3,]
+
+Des <- Affect_Passive_s %>% group_by(Participant) %>% summarize(
+  "N" = n(),
+  "Positive Affect" = paste(round(mean(pa_mean,na.rm = TRUE),2)," (", round(sd(pa_mean,na.rm = TRUE),2),")", sep = ""),
+  "Negative Affect" = paste(round(mean(na_mean,na.rm = TRUE),2)," (", round(sd(na_mean,na.rm = TRUE),2),")", sep = ""))
+
+nice_table(merge(Des,Int))
+
+# Answered ESM Questionnaire
+summary(Des$N)
+sd(Des$N)
+min(Des$N)
+max(Des$N)
+
+# Logged Interactions
+summary(Int$`Total Interactions`)
+sd(Int$`Total Interactions`)
+min(Int$`Total Interactions`)
+max(Int$`Total Interactions`)
+
+# Affect
+mean(Affect_Passive_s$pa_mean)
+sd(Affect_Passive_s$pa_mean)
+
+mean(Affect_Passive_s$na_mean)
+sd(Affect_Passive_s$na_mean)
+```
+
+## Line Plots
+```{r, echo=FALSE}
+source("https://raw.githubusercontent.com/datavizpyr/data/master/half_flat_violinplot.R")
+library(ggExtra)
+library(patchwork)
+
+variables <- colnames(Affect_Passive)[-c(1,2,3,4,37,38,57)]
+
+NormalizedVariables <- c("Total_Minutes_f2f","Total_Minutes_calling","Total_Minutes_texting","Total_Minutes_striving_behavior","Total_Minutes_mundane_maintenance_behavior", "Total_Minutes_work_school_talk", "Total_Minutes_Negative_content","Total_Minutes_partner","Total_Minutes_friend", "Total_Minutes_family","Total_Minutes_fellowstud_colleague","Total_Minutes_flatmate", "Total_Minutes_Teacher_Superior","Total_Minutes_closeness" ,"Total_Minutes_discusspersonal",              "Total_Minutes_emotionalsupport" ,"Total_Minutes_practicalsupport","APP_USAGE_min",                              "COMMUNICATION_min","SOCIAL_min", "com.whatsapp_min","APPS_OPENED_number",                         "UNIQUE_STAYPOINTS_number","Cluster_HOME_min","TIME_STATIONARY_min","AVERAGE_DISTANCE_HOME_km","CALL_TOTAL_min", "CALL_incoming_min","CALL_outgoing_min","TOTAL_MACHASHES_number","UNIQUE_MACHASHES_number" ,"SCREEN_onLocked_number","SCREEN_onUnlocked_number"  )
+
+for(i in 1:length(NormalizedVariables)){
+variable <- NormalizedVariables[i]
+a <- Affect_Passive %>%  ggplot(., aes( x = as.POSIXct(Date), y=.data[[variable]]/timescale_beforeESM/60, fill = as.factor(timescale_beforeESM), color = as.factor(timescale_beforeESM))) + 
+  geom_line() +
+  scale_x_datetime(date_labels = '%d-%m',breaks='1 weeks') +
+  theme_minimal() +
+  xlab("") + 
+  ylab(paste(variable,"(in percentage)")) +
+  labs(fill='', color = '') +
+  theme(legend.position = "none",axis.text.y=element_blank(),
+        axis.ticks.x=element_blank(), text = element_text(size= 12), panel.grid.major = element_blank(), panel.grid.minor = element_blank()) +
+  facet_grid(cols = vars(timescale_beforeESM), rows = vars(Participant), switch = "y") +
+  scale_color_manual(breaks = c(3,6,24),
+                        values=c("#440154", "#31688e","#90d743")) +
+  scale_fill_manual(breaks = c(3,6,24),
+                        values=c("#440154", "#31688e","#90d743")) 
+
+print(a)
+}
+```
+
+```{r, echo=FALSE}
+source("https://raw.githubusercontent.com/datavizpyr/data/master/half_flat_violinplot.R")
+library(ggExtra)
+library(patchwork)
+
+variables <- colnames(Affect_Passive)[-c(1,2,3,4,37,38,57)]
+
+OtherVariables <- c("Last_Interaction_enjoy","Last_Interaction_other_enjoy","Last_Interaction_meaningful","Last_Interaction_myself","Last_Interaction_costenergy","Last_Interaction_giveenergy","Last_Interaction_happy","Last_Interaction_time", "Last_Interaction_partner_closeness","Last_Interaction_partner_energygive","Last_Interaction_partner_energycost","Last_Interaction_partner_myself","Last_Interaction_partner_f2f_frequency","Last_Interaction_partner_call_frequency",    "Last_Interaction_partner_text_frequency","na_mean","pa_mean")
+
+for(i in 1:length(OtherVariables)){
+variable <- OtherVariables[i]
+a <- Affect_Passive_s %>%  ggplot(., aes( x = as.POSIXct(Date), y=.data[[variable]])) + 
+  geom_line(color ="#3b528b" ) +
+  scale_x_datetime(date_labels = '%d-%m',breaks='1 weeks') +
+  theme_minimal() +
+  xlab("") + 
+  ylab(paste(variable,"(mean)")) +
+  labs(fill='', color = '') +
+  theme(legend.position = "none", axis.text.y=element_blank(),
+        axis.ticks.x=element_blank(), text = element_text(size= 12), panel.grid.major = element_blank(), panel.grid.minor = element_blank()) +
+  facet_grid(rows = vars(Participant), switch = "y") 
+
+print(a)
+}
+```

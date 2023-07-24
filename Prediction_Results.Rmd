@@ -1,0 +1,457 @@
+---
+title: "Prediction Results"
+author: "Anna Langener"
+date: "`r Sys.Date()`"
+output:
+  word_document: default
+  html_document: default
+editor_options:
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+
+library(dplyr)
+library(ggplot2)
+library(kableExtra)
+library(flextable) # for tables
+library(rempsyc) # to make apa tables
+library(Metrics)
+library(patchwork)
+library(ggpubr)
+
+
+```
+
+
+## Specify which Dataset is used
+```{r }
+########## Choose outcome & Data set (to save result) ########
+
+lag <- "lag1" # lag05 (Robustness check, 30 minutes prediction lag)
+dataset <- "DataG" # DataL (Robustness check, only change one interaction)
+
+outcome <- "pa_mean" # pa_mean
+step <- 3 # step 1 (each test set only contains one datapoint, not reported)
+
+equal <- FALSE # Robustness check, test length equal
+```
+
+### Functions for 1) data loading, 2) perfomance calculation, 3) and plotting
+```{r}
+######### 1) Data loading ###########
+# Loads the data and recodes the participant number
+
+prep_data <- function(lag,dataset,predictors,outcome, step, equal = FALSE){
+  # data[[1]] <- Overall_results_allparticipants (Best performing model)
+  # data[[2]] <- Overall_pred_allparticipants (stores observed and predicted data)
+  # data[[3]] <- Overall_results_mean (Best performing model rolling mean)
+  # data[[4]] <- Overall_pred_mean (stores observed and predicted data)
+  
+  data <- list()  
+  
+  # Prediction results
+  data[[1]] <- read.csv(paste("Results/OverallResults","_step",step,"_",dataset,"_",lag,"_",outcome,"_",predictors,".csv",sep = ""))
+  data[[2]] <- read.csv(paste("Results/OverallPred","_step",step,"_",dataset,"_",lag,"_",outcome, "_",predictors,".csv",sep = ""))
+  
+  # Rolling Mean
+  data[[3]]  <- read.csv(paste("Results/OverallResultsMEAN","_step",step,"_",outcome,".csv",sep = ""))
+  data[[4]] <- read.csv(paste("Results/OverallPredMEAN","_step",step,"_",outcome,".csv",sep = ""))
+  
+  # Robustness check (using an equal test length)
+      if(equal == TRUE){
+      data[[2]] <- data[[2]][data[[2]]$index >= 31,]
+      data[[4]] <- data[[4]][data[[4]]$index >= 31,]
+    }
+
+  ### Recode Participant
+  data[[1]]$Participant <- recode(data[[1]]$V9,"TSCS2_2JV3YK" = 1,"TSCS2_3HJ9LJ" = 2, "TSCS2_4KUR2Z" = 3,"TSCS2_4NXMUS" = 4,
+                                       "TSCS2_5MNS2N" = 5,"TSCS2_5W3RE9" = 6,"TSCS2_6B972L" = 7, "TSCS2_6BBRGP" = 8,"TSCS2_7NJKV7" = 9,"TSCS2_857ER8" = 10,"TSCS2_9C99HU" = 11)
+  
+  data[[2]]$Participant <- recode(data[[2]]$Participant,"TSCS2_2JV3YK" = 1,"TSCS2_3HJ9LJ" = 2, "TSCS2_4KUR2Z" = 3,"TSCS2_4NXMUS" = 4,
+                                                        "TSCS2_5MNS2N" = 5,"TSCS2_5W3RE9" = 6,"TSCS2_6B972L" = 7, "TSCS2_6BBRGP" = 8,"TSCS2_7NJKV7" = 9,"TSCS2_857ER8" = 10,"TSCS2_9C99HU" = 11)
+  
+  data[[3]]$Participant <- recode(data[[3]]$V9,"TSCS2_2JV3YK" = 1,"TSCS2_3HJ9LJ" = 2, "TSCS2_4KUR2Z" = 3,"TSCS2_4NXMUS" = 4,
+                                                        "TSCS2_5MNS2N" = 5,"TSCS2_5W3RE9" = 6,"TSCS2_6B972L" = 7, "TSCS2_6BBRGP" = 8,"TSCS2_7NJKV7" = 9,"TSCS2_857ER8" = 10,"TSCS2_9C99HU" = 11)
+  
+  data[[4]]$Participant <- recode(data[[4]]$Participant,"TSCS2_2JV3YK" = 1,"TSCS2_3HJ9LJ" = 2, "TSCS2_4KUR2Z" = 3,"TSCS2_4NXMUS" = 4,
+                                             "TSCS2_5MNS2N" = 5,"TSCS2_5W3RE9" = 6,"TSCS2_6B972L" = 7, "TSCS2_6BBRGP" = 8,"TSCS2_7NJKV7" = 9,"TSCS2_857ER8" = 10,"TSCS2_9C99HU" = 11)
+  
+  return(data)
+}
+
+######## Performance #########
+rsq <- function(pred,true){
+  rss <- sum((true - pred)^2)  # residual sum of squares
+  tss <- sum((true - mean(true))^2)  # total sum of squares
+  rsq <- 1 - rss/tss
+  return(rsq)
+}
+
+# Calculates the performance based on observed and predicted values
+performanceCalc <- function(OverallResults){
+  
+  OverallResultsPerformance <- OverallResults %>% group_by(Participant,aggregation,w) %>% summarise(mape = Metrics::mape(true[complete.cases(true,pred)],pred[complete.cases(true,pred)])*100,
+    smape = smape(true[complete.cases(true,pred)],pred[complete.cases(true,pred)]),mae = mae(true[complete.cases(true,pred)],pred[complete.cases(true,pred)]), cor = cor(true,pred, use = "pairwise.complete.obs"), rsq = rsq(pred[complete.cases(true,pred)],true[complete.cases(true,pred)])) 
+  return(OverallResultsPerformance)
+}
+
+####### Plotting ########
+plot_best <- function(Overall_results_allparticipants,Overall_pred_data, ParticipantNumber){
+  # Overall_results_allparticipants = Best perfoming model
+  # Overall_pred_data = stores observed and predicted data
+  # ParticipantNumber = Participant
+  
+  Overall_results <- Overall_results_allparticipants[Overall_results_allparticipants$Participant == ParticipantNumber, ] # Shows the performance for the best performing model per participant
+  
+  Overall_pred_data <- Overall_pred_data[Overall_pred_data$Participant == ParticipantNumber,] # Stores the predicted and observed value
+  
+  Overall_pred_max <- Overall_pred_data[Overall_pred_data$w == Overall_results$Window &
+                                          Overall_pred_data$aggregation == Overall_results$Aggregation &
+                                          Overall_pred_data$predictors == Overall_results$predictors,] # Here we select the data from the best performing model
+  
+  
+  Overall_results$predictors_text <- recode(Overall_results$predictors,"all" = "all", "onlyESM" = "only ESM", "onlypassive" = "only Behapp", "onlyEgo" = "only network" )
+  
+  # Plot
+  plot <- ggplot() +
+    geom_line(aes(x = c(1:length(Overall_pred_max$pred)), y = Overall_pred_max$pred, color = "predicted outcome")) +
+    geom_line(aes(x = c(1:length(Overall_pred_max$true)), y = Overall_pred_max$true, color = "observed outcome")) +
+    theme_minimal() +
+    geom_line(aes(x = c(1:length(Overall_pred_max$true)), y = mean(Overall_pred_max$true, na.rm = TRUE), color = "mean")) +
+    ylab(paste(ifelse(outcome == "na_mean", "Negative Affect","Positive Affect"),sep = "")) +
+    xlab("ESM Measurement") +
+   # ggtitle(paste("Participant: ",ParticipantNumber,", ",Overall_results$predictors_text,sep ="")) +
+    ggtitle(paste("Participant: ",ParticipantNumber,", ","\nPredictors: ", Overall_results$predictors_text,", R2: ",Overall_results$rsq,",\nWindow: ",Overall_results$Window,", Aggregation: ",Overall_results$Aggregation,sep ="")) +
+    theme(legend.title = element_blank(),legend.text = element_text(size=12), axis.title.x =element_text(size=10, colour = "gray25"),axis.title.y =element_text(size=10, colour = "gray25")) +
+  scale_color_brewer(palette="Set1")
+  
+   return(plot) 
+}
+
+```
+
+## Analysis - extract best performing model
+### Create dataframe that contains all predicted and observed values
+```{r warning=FALSE}
+### Here we create a dataframe that contains all predicted and observed values using the different sets of predictors
+Pred_all <- list()
+predictors <- c("all","onlypassive", "onlyESM", "onlyEgo")
+
+Pred_all <- list() 
+for(i in 1:4){
+data <- prep_data(lag,dataset,predictors[i],outcome, step, equal = equal)
+data <- data[[2]] # Stores all observed and predicted datapoints
+data$predictors <- predictors[i]
+Pred_all[[i]] <- data
+}
+
+Pred_all <- as.data.frame(do.call("rbind",Pred_all)) # This dataset contains all predicted and observed values
+```
+
+### Calculated the prediction performance adjusted for missing predicted values
+```{r warning=FALSE}
+### As a next step we extract the performance measures Maximum values
+results <- list() # full results including min/max/sd
+results_short <- list() # results excluding min/max/sd
+
+### Here we check whether the model was unable to make predictions
+Missing <- Pred_all %>% group_by(Participant, aggregation, w,predictors) %>% filter(is.na(pred)) %>% summarize(percent_missing = n()/max(index)) # This dataframe contains the set of predictors per participant that had missing values
+
+predictors <- c("all","onlypassive", "onlyESM", "onlyEgo")
+
+for(i in 1:4){
+data <- prep_data(lag,dataset,predictors[i],outcome, step, equal = equal) #Load the data
+
+# Run the functions to calculate the performance
+performance <-  as.data.frame(performanceCalc(data[[2]])) 
+performance$predictors <- predictors[i]
+
+# Join the performance dataframe with the dataframe that shows wether the prediction include missing values (to exclude thos models from the best performing model)
+data_m <- performance
+data_m <- left_join(data_m,Missing, by = c("Participant" = "Participant", "w" = "w", "aggregation" = "aggregation","predictors" = "predictors"))
+
+# If the model had missing predicted values (because it was unable to make predictions) mark it with "NA", so it will get excluded.
+index <- which(!is.na(data_m$percent_missing))
+performance$rsq[index] <- NA
+performance$cor[index] <- NA
+performance$mae[index] <- NA
+performance$mape[index] <- NA
+
+# Create a data frame that shows the performance
+Best <- performance %>% group_by(Participant,predictors )%>% summarise("rsq_o" = rsq,"Participant" = Participant,"rsq" = paste(round(rsq,2)," (min = ",round(min(rsq,na.rm = TRUE),2),", sd = ",round(sd(rsq,na.rm = TRUE),2),")",sep=""),"cor" = paste(round(cor,2)," (min = ",round(min(cor,na.rm = TRUE),2),", sd = ",round(sd(cor,na.rm = TRUE),2),")",sep=""),"mae" = paste(round(mae,2)," (max = ",round(max(mae,na.rm = TRUE),2),", sd = ",round(sd(mae,na.rm = TRUE),2),")",sep=""),"mape" = paste(round(mape,2)," (max = ",round(max(mape,na.rm = TRUE),2),", sd = ",round(sd(mape,na.rm = TRUE),2),")",sep=""),"Window" = w,"Aggregation"= aggregation ,"predictors" = predictors) 
+
+# Create a data frame that shows the performance withou min/max/sd
+Best_short <- performance %>% group_by(Participant,predictors )%>% summarise("rsq" = rsq,"Participant" = Participant, "cor" = cor,"mae" = mae,"mape" = mape,"Window" = w,"Aggregation"= aggregation ,"predictors" = predictors) 
+
+### Save the results
+results[[i]] <- Best
+results_short[[i]] <- Best_short
+}
+
+### Create a dataframe that contains the best performance (including minimum maximum values)
+Best <- as.data.frame(do.call("rbind",results)) 
+Best <- Best %>% group_by(Participant) %>% top_n(1, rsq_o)
+
+Best_all <- Best[Best$predictors == "all",] %>% group_by(Participant) %>% top_n(1, rsq_o) # Best model all predictors included (we use this for the Shapley values)
+Best_all <- Best %>% group_by(Participant) %>% top_n(1, rsq_o) 
+
+Best <- Best[,-3]
+Best <- Best[order(Best$Participant),]
+
+Best_all <- Best_all[,-3]
+Best_all <- Best_all[order(Best_all$Participant),]
+
+#write.csv(Best,file = paste("Results/Best","_",dataset,"_",lag,"_",outcome,".csv",sep = "")) # save results best model (we use this for the Shapley values)
+
+#write.csv(Best_all,file = paste("Results/Best_all","_",dataset,"_",lag,"_",outcome,".csv",sep = "")) # save results best model all predictors included (we use this for the Shapley values)
+
+
+### Create a dataframe that contains the best performance (excluding minimum maximum values, used to calculate mean performance over all participants)
+Best_across_participants <- as.data.frame(do.call("rbind",results_short)) 
+Best_across_participants <- Best_across_participants %>% group_by(Participant) %>% top_n(1, rsq)
+Best_across_participants <- Best_across_participants[order(Best_across_participants$Participant),]
+
+
+## Dataframe with all results (needed to check how often a set of measures produces acceptable predictions
+results_short <- as.data.frame(do.call("rbind",results_short))
+```
+
+### Calculate best performing model rolling mean
+```{r warning=FALSE}
+######### Maximum values MEAN ###########
+data <- prep_data(lag,dataset,"all",outcome, step, equal = equal)
+data[[4]]$aggregation <- NA
+
+performance <-  as.data.frame(performanceCalc(data[[4]])) 
+performance$predictors <-"Rolling Mean"
+
+BestMean <- performance %>% group_by(Participant,predictors )%>% summarise("rsq_o" = rsq,"Participant" = Participant,"rsq" = paste(round(rsq,2)," (min = ",round(min(rsq,na.rm = TRUE),2),", sd = ",round(sd(rsq,na.rm = TRUE),2),")",sep=""),"cor" = paste(round(cor,2)," (min = ",round(min(cor,na.rm = TRUE),2),", sd = ",round(sd(cor,na.rm = TRUE),2),")",sep=""),"mae" = paste(round(mae,2)," (max = ",round(max(mae,na.rm = TRUE),2),", sd = ",round(sd(mae,na.rm = TRUE),2),")",sep=""),"mape" = paste(round(mape,2)," (max = ",round(max(mape,na.rm = TRUE),2),", sd = ",round(sd(mape,na.rm = TRUE),2),")",sep=""),"Window" = w,"Aggregation"= aggregation ,"predictors" = predictors) 
+
+
+BestMean_short <- performance %>% group_by(Participant,predictors )%>% summarise("rsq" = rsq,"Participant" = Participant, "cor" = cor,"mae" = mae,"mape" = mape,"Window" = w,"Aggregation"= NA ,"predictors" = predictors) 
+
+BestMean <- BestMean %>% group_by(Participant)%>% top_n(1, rsq_o)
+BestMean <- BestMean[,-3]
+Overall_Best_result <- rbind(Best,BestMean)
+Overall_Best_result <- Overall_Best_result[order(Overall_Best_result$Participant),]
+
+```
+
+## Results
+```{r warning=FALSE}
+nice_table(Best) # to get best performing model
+#nice_table(BestMean) #to get the table for the rolling mean results
+#nice_table(Overall_Best_result) #to get both (rolling mean and best performing modek)
+```
+
+### Line plots
+```{r}
+### Visualizations ####
+p1 <- plot_best(Best,Pred_all, ParticipantNumber = 1)
+
+library(patchwork)
+for(i in 2:11){
+p2 <- plot_best(Best,Pred_all, ParticipantNumber = i)
+p1 <- p1 + p2
+}
+p1 <- p1 + 
+    plot_annotation(title = paste(ifelse(outcome == "na_mean", "Negative Affect","Positive Affect"),sep = "")) +
+  plot_layout(guides = "collect", ncol = 3)  & theme(legend.position = 'bottom')
+
+# ggsave(
+#   paste(outcome,"_line_plot.png", sep = ""),
+#   plot = p1,
+#   width = 40,
+#   height = 29,
+#   units = c("cm"),
+#   dpi = 300,
+#   limitsize = TRUE,
+#   bg = NULL)
+# 
+# 
+```
+
+### Results Prediction Performance 
+```{r}
+# Write up results
+paste("mean rsq = ",round(mean(Best_across_participants$rsq),2), " (min = ",round(min(Best_across_participants$rsq),2),", max = ",round(max(Best_across_participants$rsq),2),", sd = ",round(sd(Best_across_participants$rsq),2),")", sep ="")
+
+paste("mean cor = ",round(mean(Best_across_participants$cor),2), " (min = ",round(min(Best_across_participants$cor),2),", max = ",round(max(Best_across_participants$cor),2),", sd = ",round(sd(Best_across_participants$cor),2),")", sep ="")
+
+paste("mean mae = ",round(mean(Best_across_participants$mae),2), " (min = ",round(min(Best_across_participants$mae),2),", max = ",round(max(Best_across_participants$mae),2),", sd = ",round(sd(Best_across_participants$mae),2),")", sep ="")
+
+paste("mean mape = ",round(mean(Best_across_participants$mape),2), " (min = ",round(min(Best_across_participants$mape),2),", max = ",round(max(Best_across_participants$mape),2),", sd = ",round(sd(Best_across_participants$mape),2),")", sep ="")
+
+
+
+```
+
+
+### Filter Participants that have better predictions than the rolling mean
+```{r}
+## Add the mean values to the dataset (create a combined dataset that shows in each row the performance of the prediction model and the rolling mean performance)
+BestMean_short$rsq_mean <- BestMean_short$rsq
+BestMean_short$cor_mean <- BestMean_short$cor
+BestMean_short$mae_mean <- BestMean_short$mae
+BestMean_short$mape_mean <- BestMean_short$mape
+BestMean_short2 <- BestMean_short %>% as.data.frame() %>% select(Participant, rsq_mean,cor_mean,mae_mean,mape_mean, Window)
+
+results_short2 <- full_join(results_short, BestMean_short2)
+
+# Save results to check the robustness later (has to be done once per robustness check)
+# if(equal == FALSE){
+# write.csv(results_short2,file = paste("Results/Performance","_",dataset,"_",lag,"_",outcome,".csv",sep = ""))
+# }else if(equal == TRUE){
+# write.csv(results_short2,file = paste("Results/Performance_equal","_",dataset,"_",lag,"_",outcome,".csv",sep = ""))
+# }
+
+# Only include Participants that are better than rolling mean
+Best_index <- results_short2 %>% group_by(Participant) %>% top_n(1, rsq)
+Best_index <- Best_index[order(Best_index$Participant),]
+
+# This index shows how many models performed better than rolling mean using the same window
+index_betterrolling <- unique(na.omit(Best_index$Participant[Best_index$rsq > Best_index$rsq_mean & Best_index$mae < Best_index$mae_mean]))
+
+index <- unique(na.omit(Best_index$Participant[Best_index$rsq > Best_index$rsq_mean & Best_index$mae < Best_index$mae_mean & Best_index$rsq > 0]))
+
+print(index)
+
+results_short2 <- results_short2 %>% filter(Participant %in% c(index))
+```
+
+
+## How much does each method add to predicting mood
+### Boxplot
+```{r}
+p1 <- ggplot(results_short2,aes(x = predictors, y=rsq, fill = predictors, color = predictors)) + 
+  geom_boxplot(alpha = 0.5, position = position_nudge(x = .3, y = 0), width = 0.6) +
+  geom_point(position = position_jitter(seed = 1, width = 0.2, height = 0)) +
+  theme_minimal() +
+  #geom_hline(data = . %>% filter(Window == 15),  aes(yintercept = rsq_mean), color = "#888888") +
+  #geom_hline(data = . %>% filter(Window == 20),  aes(yintercept = rsq_mean), color = "#555555")+
+  #geom_hline(data = . %>% filter(Window == 30),  aes(yintercept = rsq_mean), color = "black") +
+  xlab("Predictors") +
+  facet_grid(cols = vars(Participant),labeller = label_both) +
+  theme(legend.position = "bottom",legend.title = element_blank(), text = element_text(size= 12), panel.grid.minor = element_blank(),axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=0.5)) +
+  scale_color_brewer(palette="Set2",labels = c("all", "only network", "only ESM", "only Behapp")) +
+  scale_fill_brewer(palette="Set2",labels = c("all", "only network", "only ESM", "only Behapp")) +
+  scale_x_discrete(labels= c("all" = "all", "onlyEgo"="network","onlyESM"="ESM","onlypassive"= "Behapp"))
+
+p2 <- ggplot(results_short2,aes(x = predictors, y=mape, fill = predictors, color = predictors)) + 
+  geom_boxplot(alpha = 0.5, position = position_nudge(x = .3, y = 0), width = 0.6) +
+  geom_point(position = position_jitter(seed = 1, width = 0.2, height = 0)) +
+  theme_minimal() +
+  #geom_hline(data = . %>% filter(Window == 15),  aes(yintercept = mape_mean), color = "black",linetype=2) +
+  #geom_hline(data = . %>% filter(Window == 20),  aes(yintercept = mape_mean), color = "black",linetype=5)+
+  #geom_hline(data = . %>% filter(Window == 30),  aes(yintercept = mape_mean), color = "black") +
+  xlab("Predictors") +
+  facet_grid(cols = vars(Participant),labeller = label_both) +
+  theme(legend.position = "bottom",legend.title = element_blank(), text = element_text(size= 12), panel.grid.minor = element_blank(),axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=0.5)) +
+  scale_color_brewer(palette="Set2",labels = c("all", "only network", "only ESM", "only Behapp")) +
+  scale_fill_brewer(palette="Set2",labels = c("all", "only network", "only ESM", "only Behapp"))  +
+  scale_x_discrete(labels= c("all" = "all", "onlyEgo"="network","onlyESM"="ESM","onlypassive"= "Behapp"))
+
+overview_plot <- p1 / p2 + plot_layout(guides = "collect")  & theme(legend.position = 'bottom')
+
+# ggsave(
+#   paste(outcome,"_overview_plot.png", sep = ""),
+#   plot = overview_plot,
+#   width = 24,
+#   height = 14,
+#   units = c("cm"),
+#   dpi = 300,
+#   limitsize = TRUE,
+#   bg = NULL)
+```
+
+### Percentage acceptable prediction
+```{r}
+Percentage_Best <- function(results_short2){
+Per_Best <- results_short2 %>% group_by(predictors) %>% summarize(per = sum(rsq > rsq_mean & rsq > 0 & mae < mae_mean, na.rm = TRUE)/99) # To get the percentage
+
+N_Best <- results_short2 %>% group_by(predictors) %>% summarize(n = sum(rsq > rsq_mean & rsq > 0 & mae < mae_mean, na.rm = TRUE)) # To get the number
+
+results_short2 <- full_join(Per_Best, N_Best)
+return(results_short2)
+}
+```
+
+```{r}
+### Robustness Checks
+if(outcome == "na_mean"){
+DataGlag1 <- read.csv("Results/Performance_DataG_lag1_na_mean.csv")
+DataGlag05 <- read.csv("Results/Performance_DataG_lag05_na_mean.csv")
+DataLlag1 <- read.csv("Results/Performance_DataL_lag1_na_mean.csv")
+DataGlag1_equal <- read.csv("Results/Performance_equal_DataG_lag1_na_mean.csv")
+}else{
+DataGlag1 <- read.csv("Results/Performance_DataG_lag1_pa_mean.csv")
+DataGlag05 <- read.csv("Results/Performance_DataG_lag05_pa_mean.csv")
+DataLlag1 <- read.csv("Results/Performance_DataL_lag1_pa_mean.csv")
+DataGlag1_equal <- read.csv("Results/Performance_equal_DataG_lag1_pa_mean.csv")
+}
+
+Percentage_Best(DataGlag1)
+Percentage_Best(DataGlag05)
+Percentage_Best(DataLlag1)
+Percentage_Best(DataGlag1_equal)
+```
+
+
+## Robustness Checks
+```{r}
+measure <- "rsq"
+
+plot_robust <- function(measure){
+p1 <- ggplot() +
+  geom_point(aes(y = DataGlag1[[measure]], x = DataGlag05[[measure]], color = as.factor(DataGlag1$Participant))) +
+  ylab("Lag 60 Min") +
+  xlab("Lag 30 Min") +
+  theme_minimal() +
+  ggtitle(paste("r =",round(cor(DataGlag1[[measure]], DataGlag05[[measure]], use = "complete.obs"),3))) +
+  theme(legend.title=element_blank()) +
+  scale_color_brewer(palette="Set3") +
+  geom_smooth(aes(y = DataGlag1[[measure]], x = DataGlag05[[measure]], colour = as.factor(DataGlag1$Participant)), se = FALSE, method = "lm", fullrange = FALSE)
+
+p2 <- ggplot() +
+  geom_point(aes(y = DataGlag1[[measure]], x = DataLlag1[[measure]], color = as.factor(DataGlag1$Participant))) +
+  ylab("Lag 60 Min") +
+  xlab("Lag 60 Min (only one adjustment)") +
+  theme_minimal() +
+  ggtitle(paste("r =",round(cor(DataGlag1[[measure]], DataLlag1[[measure]], use = "complete.obs"),3))) +
+  theme(legend.title=element_blank()) +
+  scale_color_brewer(palette="Set3") +
+  geom_smooth(aes(y = DataGlag1[[measure]], x = DataLlag1[[measure]], colour = as.factor(DataGlag1$Participant)), se = FALSE, method = "lm", fullrange = FALSE)
+
+p3 <- ggplot() +
+  geom_point(aes(y = DataGlag1[[measure]], x = DataGlag1_equal[[measure]], color = as.factor(DataGlag1_equal$Participant))) +
+  ylab("Lag 60 Min") +
+  xlab("Lag 60 Min (equal test length)") +
+  theme_minimal() +
+  ggtitle(paste("r =",round(cor(DataGlag1[[measure]], DataGlag1_equal[[measure]], use = "complete.obs"),3))) +
+  theme(legend.title=element_blank()) +
+  scale_color_brewer(palette="Set3") +
+  geom_smooth(aes(y = DataGlag1[[measure]], x = DataGlag1_equal[[measure]], colour = as.factor(DataGlag1_equal$Participant)), se = FALSE, method = "lm", fullrange = FALSE)
+
+p0 <-ggarrange(p1,p2,p3, ncol = 3,common.legend = TRUE, legend = "right")
+p0 <- annotate_figure(p0, top = text_grob(paste("Correlation of",measure,"between different datasets")))
+return(p0)
+}
+
+p1 <- plot_robust("rsq") 
+p2 <- plot_robust("mape")
+
+
+p_robust <- ggarrange(p1,p2, nrow = 2,common.legend = TRUE)
+
+# ggsave(
+#   paste(outcome,"_robust_plot.png", sep = ""),
+#   plot = p_robust,
+#   width = 24,
+#   height = 16,
+#   units = c("cm"),
+#   dpi = 300,
+#   limitsize = TRUE,
+#   bg = NULL)
+```
